@@ -1,0 +1,180 @@
+---
+title: "Practical Machine Learning Project Write-up"
+author: "Jaana Y."
+date: "November 13, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("C:/Users/jtuo1504/Documents/R/PracticalMachineLearning")
+
+```
+
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Packages used
+```{r, message = FALSE, warning = FALSE}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+```
+
+## Getting the data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har
+
+The data can be downloaded using code or clicking on the links above. Since the data was already saved to the the writer's local machine during the process of completing this project, the import code was inactivated, but is included below for review.
+```{r}
+## trainURL <- https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  ## Training dataset
+trainFILE <- "pml-training.csv"
+#download.file(url=trainURL, na.strings = c("NA", ""), header = TRUE)
+
+## testURL <- https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  ## Testing dataset
+testFILE <- "pml-testing.csv"
+#download.file(url=testURL, na.strings = c("NA", ""), header = TRUE)
+
+## Import the data
+trainDS <- read.csv(trainFILE, na.strings=c("NA", "#DIV/0!", ""), header = TRUE)
+testDS <- read.csv(testFILE, na.strings = c("NA", "#DIV/0!", ""), header = TRUE)
+
+dim(trainDS)
+```
+
+The first 6 columns contain non-essential, descriptive data and were removed to simplify the dataset.
+```{r}
+trainDS <- trainDS[,7:160]
+testDS <- testDS[,7:160]
+dim(trainDS)
+```
+
+Any columns containing missing values were removed, because it is impossible to develop a functioning model based on non-existent data.
+```{r}
+noNAs <- apply(!is.na(trainDS), 2, sum) > 19621
+
+trainDS <- trainDS[, noNAs]
+testDS <- testDS[, noNAs]
+
+dim(trainDS)
+
+```
+
+The training dataset was separated into two separate datasets (train1 and train2) for cross-validation purposes.  60% of the set will be used solely to build the model, while the remaining 40% will be used to test the model and evaluate the accuracy.
+```{r}
+set.seed(12345)
+
+sixtyPerc <- createDataPartition(y=trainDS$classe, p = 0.60, list = FALSE)
+
+train1 <- trainDS[sixtyPerc,]
+train2 <- trainDS[-sixtyPerc,]
+
+dim(train1)
+dim(train2)
+
+```
+
+The next step will be to identify the near zero covariates from train1 and then remove the zero covariates from both train1 and train2.  Since the missing values were removed in an early step, it is expected that this step will not add much to the data cleaning, but will add another layer of assurance.
+```{r}
+NZV <- nearZeroVar(train1)
+if(length(NZV) > 0) {
+  train1 <- train1[, -NZV]
+  train2 <- train2[, -NZV]
+}
+
+dim(train1)
+dim(train2)
+
+```
+
+## Data Manipulation
+
+There currently are 53 variables in the dataset.  While it is possible to build a model off of the entire dataset, there could be an unintended influence of confounding variables.  To reduce the chance of random noise, only a select few variables will be used.  The following Random Forest model was genereated to determine the top ten varaibles that will be used to narrow down the dataset.
+```{r}
+modFit <- randomForest(classe ~., data = train1, importance  = TRUE, ntree = 100)
+
+varImpPlot(modFit, type = 2)
+
+correl = cor(train1[,c("yaw_belt","roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm","magnet_dumbbell_x")])
+
+which(abs(correl)>0.75, arr.ind = TRUE)
+
+```
+This shows there are four variables that may have a significant influence on each other (roll_belt & yaw_belt) and (magnet_dumbbel_x & magnet_dumbbel_y).
+
+```{r, eval = FALSE}
+cor(train1$roll_belt, train1$yaw_belt)
+cor(train1$magnet_dumbbell_x, train1$magnet_dumbbell_y)
+
+correl = cor(train1[,c("yaw_belt","roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm")])
+
+which(abs(correl)>0.75, arr.ind = TRUE)
+
+cor(train1$roll_belt, train1$yaw_belt)
+
+correl = cor(train1[,c("roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm")])
+
+which(abs(correl)>0.75, arr.ind = TRUE)
+
+```
+With the above code, magnet_dumbbell_x and yaw_belt were removed because of their influence on other variables.  The following variables were used to fit a model used in this project: "roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm".
+
+With 8 variables, the number of confounding factors is limited, and the model will not be overfit (only applicable to the dataset it was built off of).
+
+
+## Modeling
+The Random Forest algorithm was chosen because it seemed like a good choice based on the class lectures.  As a point of comparison the decision tree algorithm was used to determine if there was a better choice.
+
+Random Forest:
+```{r}
+modFit1 <- train(classe ~ roll_belt+num_window+pitch_belt+magnet_dumbbell_z+magnet_dumbbell_y+pitch_forearm+accel_dumbbell_y+roll_arm, data = train1, method = "rf", trControl = trainControl(method = "cv", number = 2))
+
+print(modFit1, digits = 4)
+
+```
+
+Decision tree:
+```{r, message = FALSE, warning = FALSE}
+modFit2 <- rpart(classe ~ roll_belt+num_window+pitch_belt+magnet_dumbbell_z+magnet_dumbbell_y+pitch_forearm+accel_dumbbell_y+roll_arm, data = train1, method = "class")
+prp(modFit2)
+```
+
+
+### Accuracy
+To test the accuraccy of the models above, the second half of the training set (train2) was used for cross-validation.
+
+Accuracy of modFit1
+```{r}
+predictMF1 <- predict(modFit1, train2)
+confMatrix1 <- confusionMatrix(predictMF1, train2$classe)
+confMatrix1
+```
+The accuracy of modFit1 is 99.86%.
+
+Accuracy of modFit2
+```{r}
+predictMF2 <- predict(modFit2, train2, type = "class")
+confMatrix2 <- confusionMatrix(predictMF2, train2$classe)
+confMatrix2
+```
+The accuracy of modFit2 is 83.07%.
+
+Based on the accuracy modFit1 (Random Forest) was chosen as the preferred model for this project.
+
+### Out-of-sample error rate
+The purpose of separating out train2 from the training dataset was to allow for preliminary testing of the prediction model.  This will give an unbiased estimate of the Random Forest algoritm's prediction accuracy.  Out-of sample error rate is calcluated either by this formula (1 - Accuracy = Out-of-sample error rate).
+
+1 - .9986 = 0.0014 or 0.14%.
+
+### Quiz Submission
+The final step of this project was to complete the Project Prediction Quiz.  The model modFit1 was used because of the 99.86% accuracy.
+
+```{r, eval= FALSE}
+predictTest <- predict(modFit1, testDS)
+```
